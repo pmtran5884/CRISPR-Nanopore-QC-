@@ -59,7 +59,7 @@ if fastq_file and key_file:
             if avg_q < min_q_score:
                 continue
             passed_qc_reads += 1
-            
+
             # --- Filter 2: Strand Handling & Flank Search ---
             seq_fwd = str(record.seq)
             seq_rev = str(record.seq.reverse_complement())
@@ -67,24 +67,24 @@ if fastq_file and key_file:
             b_fwd = ""
             b_rev = ""
             
-            # Test Forward Strand
-            m5_fwd = edlib.align(flank_5, seq_fwd, mode="HW", k=2)
-            m3_fwd = edlib.align(flank_3, seq_fwd, mode="HW", k=2)
+            # Test Forward Strand (Added task="locations")
+            m5_fwd = edlib.align(flank_5, seq_fwd, mode="HW", task="locations", k=2)
+            m3_fwd = edlib.align(flank_3, seq_fwd, mode="HW", task="locations", k=2)
             if m5_fwd['editDistance'] != -1 and m3_fwd['editDistance'] != -1:
                 start = m5_fwd['locations'][0][1] + 1
                 end = m3_fwd['locations'][0][0]
                 if start < end:
                     b_fwd = seq_fwd[start:end]
 
-            # Test Reverse Strand
-            m5_rev = edlib.align(flank_5, seq_rev, mode="HW", k=2)
-            m3_rev = edlib.align(flank_3, seq_rev, mode="HW", k=2)
+            # Test Reverse Strand (Added task="locations")
+            m5_rev = edlib.align(flank_5, seq_rev, mode="HW", task="locations", k=2)
+            m3_rev = edlib.align(flank_3, seq_rev, mode="HW", task="locations", k=2)
             if m5_rev['editDistance'] != -1 and m3_rev['editDistance'] != -1:
                 start = m5_rev['locations'][0][1] + 1
                 end = m3_rev['locations'][0][0]
                 if start < end:
                     b_rev = seq_rev[start:end]
-            
+
             # --- Filter 3: Valid Length Check ---
             barcode = None
             
