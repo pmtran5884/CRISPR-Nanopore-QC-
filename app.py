@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import edlib
 from Bio import SeqIO
-from Bio.Seq import Seq
 import plotly.express as px
 import numpy as np
 import io
@@ -15,10 +14,27 @@ with st.sidebar:
     fastq_file = st.file_uploader("Upload Nanopore FASTQ (5-10MB)", type=['fastq', 'fq'])
     key_file = st.file_uploader("Upload sgRNA Key (CSV)", type=['csv'])
     
-    st.header("Parameters")
-    st.markdown("**Note: Flanks must be present in your PCR amplicon!**")
-    flank_5 = st.text_input("5' Flank (e.g., end of promoter)", value="CGAAACACCG").upper()
-    flank_3 = st.text_input("3' Flank (e.g., start of scaffold)", value="GTTTAAGAGC").upper()
+    st.header("Library Type & Flanks")
+    preset_choice = st.radio(
+        "Select your vector/library type:",
+        ("CRISPRa (pXPR_502)", "Standard CRISPR KO", "Custom")
+    )
+
+    # Handle Preset Logic
+    if preset_choice == "CRISPRa (pXPR_502)":
+        flank_5 = "CGAAACACCG"
+        flank_3 = "GTTTAAGAGC"
+        st.success(f"**5' Flank:** `{flank_5}`\n\n**3' Flank:** `{flank_3}`")
+    elif preset_choice == "Standard CRISPR KO":
+        flank_5 = "CGAAACACCG"
+        flank_3 = "GTTTTAGAGC"
+        st.success(f"**5' Flank:** `{flank_5}`\n\n**3' Flank:** `{flank_3}`")
+    else:
+        st.warning("⚠️ **Watch your orientation!** If pulling flanks from a consensus sequence, ensure they are the forward strand flanks reading left-to-right across your guide. If pipeline fails, you may need to use their reverse-complements.")
+        flank_5 = st.text_input("Custom 5' Flank", value="CGAAACACCG").upper()
+        flank_3 = st.text_input("Custom 3' Flank", value="GTTTTAGAGC").upper()
+
+    st.header("Advanced Parameters")
     min_q_score = st.slider("Minimum Average Q-Score", min_value=5, max_value=15, value=10)
     max_errors = st.number_input("Max Levenshtein Errors for Library Match", min_value=0, max_value=5, value=3)
 
@@ -26,7 +42,9 @@ with st.sidebar:
 if fastq_file and key_file:
     if st.button("Run QC Analysis", type="primary"):
         
+        # Load Key and drop empty rows safely
         df_key = pd.read_csv(key_file)
+        df_key = df_key.dropna(subset=['Guide_Seq']) 
         library_guides = df_key['Guide_Seq'].str.upper().tolist()
         
         # --- Diagnostic Counters ---
@@ -59,7 +77,7 @@ if fastq_file and key_file:
             if avg_q < min_q_score:
                 continue
             passed_qc_reads += 1
-
+            
             # --- Filter 2: Strand Handling & Flank Search ---
             seq_fwd = str(record.seq)
             seq_rev = str(record.seq.reverse_complement())
@@ -67,7 +85,7 @@ if fastq_file and key_file:
             b_fwd = ""
             b_rev = ""
             
-            # Test Forward Strand (Added task="locations")
+            # Test Forward Strand
             m5_fwd = edlib.align(flank_5, seq_fwd, mode="HW", task="locations", k=2)
             m3_fwd = edlib.align(flank_3, seq_fwd, mode="HW", task="locations", k=2)
             if m5_fwd['editDistance'] != -1 and m3_fwd['editDistance'] != -1:
@@ -76,7 +94,7 @@ if fastq_file and key_file:
                 if start < end:
                     b_fwd = seq_fwd[start:end]
 
-            # Test Reverse Strand (Added task="locations")
+            # Test Reverse Strand
             m5_rev = edlib.align(flank_5, seq_rev, mode="HW", task="locations", k=2)
             m3_rev = edlib.align(flank_3, seq_rev, mode="HW", task="locations", k=2)
             if m5_rev['editDistance'] != -1 and m3_rev['editDistance'] != -1:
@@ -84,7 +102,7 @@ if fastq_file and key_file:
                 end = m3_rev['locations'][0][0]
                 if start < end:
                     b_rev = seq_rev[start:end]
-
+            
             # --- Filter 3: Valid Length Check ---
             barcode = None
             
