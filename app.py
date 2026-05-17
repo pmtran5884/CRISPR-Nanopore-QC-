@@ -18,7 +18,7 @@ with st.sidebar:
     st.header("Parameters")
     st.markdown("**Note: Flanks must be present in your PCR amplicon!**")
     flank_5 = st.text_input("5' Flank (e.g., end of promoter)", value="CGAAACACCG").upper()
-    flank_3 = st.text_input("3' Flank (e.g., start of scaffold)", value="GTTTTAGAGC").upper()
+    flank_3 = st.text_input("3' Flank (e.g., start of scaffold)", value="GTTTAAGAGC").upper()
     min_q_score = st.slider("Minimum Average Q-Score", min_value=5, max_value=15, value=10)
     max_errors = st.number_input("Max Levenshtein Errors for Library Match", min_value=0, max_value=5, value=3)
 
@@ -37,6 +37,7 @@ if fastq_file and key_file:
         matched_to_library = 0
         
         extracted_barcodes = []
+        all_extracted_lengths = []
         
         fastq_string = io.StringIO(fastq_file.getvalue().decode("utf-8"))
         
@@ -61,30 +62,48 @@ if fastq_file and key_file:
             
             # --- Filter 2: Strand Handling & Flank Search ---
             seq_fwd = str(record.seq)
-            match_5 = edlib.align(flank_5, seq_fwd, mode="HW", k=2)
-            match_3 = edlib.align(flank_3, seq_fwd, mode="HW", k=2)
+            seq_rev = str(record.seq.reverse_complement())
             
-            barcode = None
-            if match_5['editDistance'] != -1 and match_3['editDistance'] != -1:
-                start_idx = match_5['locations'][0][1] + 1
-                end_idx = match_3['locations'][0][0]
-                barcode = seq_fwd[start_idx:end_idx]
-            else:
-                seq_rev = str(record.seq.reverse_complement())
-                match_5_rev = edlib.align(flank_5, seq_rev, mode="HW", k=2)
-                match_3_rev = edlib.align(flank_3, seq_rev, mode="HW", k=2)
-                
-                if match_5_rev['editDistance'] != -1 and match_3_rev['editDistance'] != -1:
-                    start_idx = match_5_rev['locations'][0][1] + 1
-                    end_idx = match_3_rev['locations'][0][0]
-                    barcode = seq_rev[start_idx:end_idx]
+            b_fwd = ""
+            b_rev = ""
+            
+            # Test Forward Strand
+            m5_fwd = edlib.align(flank_5, seq_fwd, mode="HW", k=2)
+            m3_fwd = edlib.align(flank_3, seq_fwd, mode="HW", k=2)
+            if m5_fwd['editDistance'] != -1 and m3_fwd['editDistance'] != -1:
+                start = m5_fwd['locations'][0][1] + 1
+                end = m3_fwd['locations'][0][0]
+                if start < end:
+                    b_fwd = seq_fwd[start:end]
+
+            # Test Reverse Strand
+            m5_rev = edlib.align(flank_5, seq_rev, mode="HW", k=2)
+            m3_rev = edlib.align(flank_3, seq_rev, mode="HW", k=2)
+            if m5_rev['editDistance'] != -1 and m3_rev['editDistance'] != -1:
+                start = m5_rev['locations'][0][1] + 1
+                end = m3_rev['locations'][0][0]
+                if start < end:
+                    b_rev = seq_rev[start:end]
             
             # --- Filter 3: Valid Length Check ---
-            if barcode:
+            barcode = None
+            
+            # Prioritize the strand that actually gives a ~20bp sequence
+            if 17 <= len(b_fwd) <= 23:
+                barcode = b_fwd
                 flanks_found += 1
-                if 17 <= len(barcode) <= 23:
-                    correct_length_barcodes += 1
-                    extracted_barcodes.append(barcode)
+            elif 17 <= len(b_rev) <= 23:
+                barcode = b_rev
+                flanks_found += 1
+            elif len(b_fwd) > 0 or len(b_rev) > 0:
+                # Flanks were found, but the distance is garbage
+                flanks_found += 1
+                if len(b_fwd) > 0: all_extracted_lengths.append(len(b_fwd))
+                elif len(b_rev) > 0: all_extracted_lengths.append(len(b_rev))
+                
+            if barcode:
+                correct_length_barcodes += 1
+                extracted_barcodes.append(barcode)
 
         my_bar.empty() 
         
@@ -109,7 +128,6 @@ if fastq_file and key_file:
         # --- Diagnostics Output UI ---
         st.success("Processing Complete!")
         st.header("Pipeline Diagnostics")
-        st.caption("Identify where your reads are dropping out:")
         
         col1, col2, col3, col4, col5 = st.columns(5)
         col1.metric("1. Total Reads", total_reads)
@@ -117,6 +135,18 @@ if fastq_file and key_file:
         col3.metric("3. Flanks Found", flanks_found)
         col4.metric("4. Valid Length", correct_length_barcodes)
         col5.metric("5. Library Match", matched_to_library)
+        
+        st.divider()
+
+        st.subheader("Diagnostic: Distance Between Flanks")
+        if all_extracted_lengths:
+            fig_len = px.histogram(x=all_extracted_lengths, nbins=100, 
+                                   labels={'x': 'Distance between flanks (bp)', 'y': 'Number of Reads'}, 
+                                   title="What is the actual length of the extracted barcodes?")
+            fig_len.update_xaxes(range=[-50, 300]) 
+            st.plotly_chart(fig_len)
+        else:
+            st.info("No invalid lengths to display.")
         
         st.divider()
 
