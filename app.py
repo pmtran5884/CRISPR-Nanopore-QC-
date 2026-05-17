@@ -16,49 +16,50 @@ with st.sidebar:
     key_file = st.file_uploader("Upload sgRNA Key (CSV)", type=['csv'])
     
     st.header("Parameters")
-    flank_5 = st.text_input("5' Flank (e.g., end of U6)", value="CGAAACACCG").upper()
+    st.markdown("**Note: Flanks must be present in your PCR amplicon!**")
+    flank_5 = st.text_input("5' Flank (e.g., end of promoter)", value="CGAAACACCG").upper()
     flank_3 = st.text_input("3' Flank (e.g., start of scaffold)", value="GTTTTAGAGC").upper()
     min_q_score = st.slider("Minimum Average Q-Score", min_value=5, max_value=15, value=10)
     max_errors = st.number_input("Max Levenshtein Errors for Library Match", min_value=0, max_value=5, value=3)
 
 # --- 2. Data Parsing & Processing ---
 if fastq_file and key_file:
-    # Add a dedicated Run button
     if st.button("Run QC Analysis", type="primary"):
         
-        # Load Key into a dictionary for fast lookup
         df_key = pd.read_csv(key_file)
         library_guides = df_key['Guide_Seq'].str.upper().tolist()
         
-        extracted_barcodes = []
+        # --- Diagnostic Counters ---
+        total_reads = 0
         passed_qc_reads = 0
+        flanks_found = 0
+        correct_length_barcodes = 0
+        matched_to_library = 0
+        
+        extracted_barcodes = []
         
         fastq_string = io.StringIO(fastq_file.getvalue().decode("utf-8"))
         
-        # Load all reads into memory to get a total count for the progress bar
         with st.spinner("Loading FASTQ file into memory..."):
             all_reads = list(SeqIO.parse(fastq_string, "fastq"))
             total_reads = len(all_reads)
         
-        # Set up the visual progress bar
         progress_text = "Parsing reads and extracting barcodes..."
         my_bar = st.progress(0, text=progress_text)
         
         for i, record in enumerate(all_reads):
-            # Update progress bar every 1000 reads to save UI rendering time
             if i % 1000 == 0 or i == total_reads - 1:
                 progress_percent = int((i / total_reads) * 100)
                 my_bar.progress(progress_percent, text=f"{progress_text} ({i}/{total_reads} reads)")
                 
-            # --- Quality Trimming ---
+            # --- Filter 1: Quality Trimming ---
             quals = record.letter_annotations["phred_quality"]
             avg_q = sum(quals) / len(quals)
             if avg_q < min_q_score:
                 continue
-            
             passed_qc_reads += 1
             
-            # --- Strand Handling ---
+            # --- Filter 2: Strand Handling & Flank Search ---
             seq_fwd = str(record.seq)
             match_5 = edlib.align(flank_5, seq_fwd, mode="HW", k=2)
             match_3 = edlib.align(flank_3, seq_fwd, mode="HW", k=2)
@@ -78,12 +79,16 @@ if fastq_file and key_file:
                     end_idx = match_3_rev['locations'][0][0]
                     barcode = seq_rev[start_idx:end_idx]
             
-            if barcode and 17 <= len(barcode) <= 23:
-                extracted_barcodes.append(barcode)
+            # --- Filter 3: Valid Length Check ---
+            if barcode:
+                flanks_found += 1
+                if 17 <= len(barcode) <= 23:
+                    correct_length_barcodes += 1
+                    extracted_barcodes.append(barcode)
 
-        my_bar.empty() # Clear the progress bar when done
+        my_bar.empty() 
         
-        # --- 3. Fuzzy Matching to Library ---
+        # --- Filter 4: Fuzzy Matching to Library ---
         guide_counts = {guide: 0 for guide in library_guides}
         
         with st.spinner(f'Matching {len(extracted_barcodes)} extracted barcodes to library...'):
@@ -99,30 +104,39 @@ if fastq_file and key_file:
                         
                 if best_match:
                     guide_counts[best_match] += 1
+                    matched_to_library += 1
 
-        # --- 4. Aggregation and Scoring ---
-        st.success(f"Processing Complete! Passed QC: {passed_qc_reads}/{total_reads} reads.")
+        # --- Diagnostics Output UI ---
+        st.success("Processing Complete!")
+        st.header("Pipeline Diagnostics")
+        st.caption("Identify where your reads are dropping out:")
         
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("1. Total Reads", total_reads)
+        col2.metric("2. Passed QC", passed_qc_reads)
+        col3.metric("3. Flanks Found", flanks_found)
+        col4.metric("4. Valid Length", correct_length_barcodes)
+        col5.metric("5. Library Match", matched_to_library)
+        
+        st.divider()
+
+        # --- Aggregation and Scoring ---
         df_results = pd.DataFrame(list(guide_counts.items()), columns=['Guide_Seq', 'Read_Count'])
         df_merged = pd.merge(df_results, df_key, on='Guide_Seq')
         
-        # EVERYTHING BELOW HERE WAS FIXED (Indented to belong inside the button click)
-        # Group by Gene
         gene_stats = df_merged.groupby('Gene').agg(
             Total_Reads=('Read_Count', 'sum'),
             Guides_Detected=('Read_Count', lambda x: (x > 0).sum()),
             Expected_Guides=('Guide_Seq', 'count')
         ).reset_index()
         
-        # Composite Score: Log2(reads) weighted by fraction of guides found
         gene_stats['Score'] = np.log2(1 + gene_stats['Total_Reads']) * (gene_stats['Guides_Detected'] / gene_stats['Expected_Guides'])
         gene_stats = gene_stats.sort_values(by='Score', ascending=False)
 
-        # --- 5. Output & Visualization ---
+        # --- Output & Visualization ---
         st.header("Results Ranking")
         st.dataframe(gene_stats)
         
-        # Download Button
         csv = gene_stats.to_csv(index=False).encode('utf-8')
         st.download_button("Download Results CSV", csv, "crispr_qc_results.csv", "text/csv")
         
