@@ -36,7 +36,6 @@ if fastq_file and key_file:
         fastq_string = io.StringIO(fastq_file.getvalue().decode("utf-8"))
         
         # Load all reads into memory to get a total count for the progress bar
-        # (A 10MB file easily fits in Streamlit's RAM limits)
         with st.spinner("Loading FASTQ file into memory..."):
             all_reads = list(SeqIO.parse(fastq_string, "fastq"))
             total_reads = len(all_reads)
@@ -107,26 +106,27 @@ if fastq_file and key_file:
         df_results = pd.DataFrame(list(guide_counts.items()), columns=['Guide_Seq', 'Read_Count'])
         df_merged = pd.merge(df_results, df_key, on='Guide_Seq')
         
-    # Group by Gene
-    gene_stats = df_merged.groupby('Gene').agg(
-        Total_Reads=('Read_Count', 'sum'),
-        Guides_Detected=('Read_Count', lambda x: (x > 0).sum()),
-        Expected_Guides=('Guide_Seq', 'count')
-    ).reset_index()
-    
-    # Composite Score: Log2(reads) weighted by fraction of guides found
-    gene_stats['Score'] = np.log2(1 + gene_stats['Total_Reads']) * (gene_stats['Guides_Detected'] / gene_stats['Expected_Guides'])
-    gene_stats = gene_stats.sort_values(by='Score', ascending=False)
+        # EVERYTHING BELOW HERE WAS FIXED (Indented to belong inside the button click)
+        # Group by Gene
+        gene_stats = df_merged.groupby('Gene').agg(
+            Total_Reads=('Read_Count', 'sum'),
+            Guides_Detected=('Read_Count', lambda x: (x > 0).sum()),
+            Expected_Guides=('Guide_Seq', 'count')
+        ).reset_index()
+        
+        # Composite Score: Log2(reads) weighted by fraction of guides found
+        gene_stats['Score'] = np.log2(1 + gene_stats['Total_Reads']) * (gene_stats['Guides_Detected'] / gene_stats['Expected_Guides'])
+        gene_stats = gene_stats.sort_values(by='Score', ascending=False)
 
-    # --- 5. Output & Visualization ---
-    st.header("Results Ranking")
-    st.dataframe(gene_stats)
-    
-    # Download Button
-    csv = gene_stats.to_csv(index=False).encode('utf-8')
-    st.download_button("Download Results CSV", csv, "crispr_qc_results.csv", "text/csv")
-    
-    st.header("Representation Quality")
-    fig = px.scatter(gene_stats, x='Total_Reads', y='Guides_Detected', 
-                     hover_data=['Gene'], title="Gene Representation vs. Read Depth")
-    st.plotly_chart(fig)
+        # --- 5. Output & Visualization ---
+        st.header("Results Ranking")
+        st.dataframe(gene_stats)
+        
+        # Download Button
+        csv = gene_stats.to_csv(index=False).encode('utf-8')
+        st.download_button("Download Results CSV", csv, "crispr_qc_results.csv", "text/csv")
+        
+        st.header("Representation Quality")
+        fig = px.scatter(gene_stats, x='Total_Reads', y='Guides_Detected', 
+                         hover_data=['Gene'], title="Gene Representation vs. Read Depth")
+        st.plotly_chart(fig)
