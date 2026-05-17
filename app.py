@@ -23,21 +23,34 @@ with st.sidebar:
 
 # --- 2. Data Parsing & Processing ---
 if fastq_file and key_file:
-    # Load Key into a dictionary for fast lookup
-    df_key = pd.read_csv(key_file)
-    library_guides = df_key['Guide_Seq'].str.upper().tolist()
-    
-    extracted_barcodes = []
-    total_reads = 0
-    passed_qc_reads = 0
-    
-    # Read FASTQ using io.StringIO for Streamlit UploadedFile compatibility
-    fastq_string = io.StringIO(fastq_file.getvalue().decode("utf-8"))
-    
-    with st.spinner('Parsing and extracting reads...'):
-        for record in SeqIO.parse(fastq_string, "fastq"):
-            total_reads += 1
-            
+    # Add a dedicated Run button
+    if st.button("Run QC Analysis", type="primary"):
+        
+        # Load Key into a dictionary for fast lookup
+        df_key = pd.read_csv(key_file)
+        library_guides = df_key['Guide_Seq'].str.upper().tolist()
+        
+        extracted_barcodes = []
+        passed_qc_reads = 0
+        
+        fastq_string = io.StringIO(fastq_file.getvalue().decode("utf-8"))
+        
+        # Load all reads into memory to get a total count for the progress bar
+        # (A 10MB file easily fits in Streamlit's RAM limits)
+        with st.spinner("Loading FASTQ file into memory..."):
+            all_reads = list(SeqIO.parse(fastq_string, "fastq"))
+            total_reads = len(all_reads)
+        
+        # Set up the visual progress bar
+        progress_text = "Parsing reads and extracting barcodes..."
+        my_bar = st.progress(0, text=progress_text)
+        
+        for i, record in enumerate(all_reads):
+            # Update progress bar every 1000 reads to save UI rendering time
+            if i % 1000 == 0 or i == total_reads - 1:
+                progress_percent = int((i / total_reads) * 100)
+                my_bar.progress(progress_percent, text=f"{progress_text} ({i}/{total_reads} reads)")
+                
             # --- Quality Trimming ---
             quals = record.letter_annotations["phred_quality"]
             avg_q = sum(quals) / len(quals)
@@ -47,7 +60,6 @@ if fastq_file and key_file:
             passed_qc_reads += 1
             
             # --- Strand Handling ---
-            # Test Forward Strand
             seq_fwd = str(record.seq)
             match_5 = edlib.align(flank_5, seq_fwd, mode="HW", k=2)
             match_3 = edlib.align(flank_3, seq_fwd, mode="HW", k=2)
@@ -58,7 +70,6 @@ if fastq_file and key_file:
                 end_idx = match_3['locations'][0][0]
                 barcode = seq_fwd[start_idx:end_idx]
             else:
-                # Test Reverse Complement Strand
                 seq_rev = str(record.seq.reverse_complement())
                 match_5_rev = edlib.align(flank_5, seq_rev, mode="HW", k=2)
                 match_3_rev = edlib.align(flank_3, seq_rev, mode="HW", k=2)
@@ -68,33 +79,34 @@ if fastq_file and key_file:
                     end_idx = match_3_rev['locations'][0][0]
                     barcode = seq_rev[start_idx:end_idx]
             
-            # Length Sanity Check (Allowing 17-23bp for a 20bp target due to indels)
             if barcode and 17 <= len(barcode) <= 23:
                 extracted_barcodes.append(barcode)
 
-    # --- 3. Fuzzy Matching to Library ---
-    guide_counts = {guide: 0 for guide in library_guides}
-    
-    with st.spinner('Matching barcodes to library...'):
-        for barcode in extracted_barcodes:
-            best_match = None
-            best_score = max_errors + 1 
-            
-            for guide in library_guides:
-                dist = edlib.align(barcode, guide, mode="NW", task="distance")['editDistance']
-                if dist < best_score:
-                    best_score = dist
-                    best_match = guide
-                    
-            if best_match:
-                guide_counts[best_match] += 1
+        my_bar.empty() # Clear the progress bar when done
+        
+        # --- 3. Fuzzy Matching to Library ---
+        guide_counts = {guide: 0 for guide in library_guides}
+        
+        with st.spinner(f'Matching {len(extracted_barcodes)} extracted barcodes to library...'):
+            for barcode in extracted_barcodes:
+                best_match = None
+                best_score = max_errors + 1 
+                
+                for guide in library_guides:
+                    dist = edlib.align(barcode, guide, mode="NW", task="distance")['editDistance']
+                    if dist < best_score:
+                        best_score = dist
+                        best_match = guide
+                        
+                if best_match:
+                    guide_counts[best_match] += 1
 
-    # --- 4. Aggregation and Scoring ---
-    st.success(f"Processing Complete! Passed QC: {passed_qc_reads}/{total_reads} reads.")
-    
-    df_results = pd.DataFrame(list(guide_counts.items()), columns=['Guide_Seq', 'Read_Count'])
-    df_merged = pd.merge(df_results, df_key, on='Guide_Seq')
-    
+        # --- 4. Aggregation and Scoring ---
+        st.success(f"Processing Complete! Passed QC: {passed_qc_reads}/{total_reads} reads.")
+        
+        df_results = pd.DataFrame(list(guide_counts.items()), columns=['Guide_Seq', 'Read_Count'])
+        df_merged = pd.merge(df_results, df_key, on='Guide_Seq')
+        
     # Group by Gene
     gene_stats = df_merged.groupby('Gene').agg(
         Total_Reads=('Read_Count', 'sum'),
