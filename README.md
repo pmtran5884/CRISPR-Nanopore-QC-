@@ -19,7 +19,7 @@ Waiting for deep Illumina sequencing to confirm library representation can cost 
 * **Composite Ranking:** Ranks genes based on a composite score that balances total read depth with the fraction of expected guides successfully detected.
 
 ## 🚀 Live Demo
-(https://b3yrslgizptbgufb9bersq.streamlit.app/#rapid-crispr-screen-qc-nanopore)
+([https://b3yrslgizptbgufb9bersq.streamlit.app/#rapid-crispr-screen-qc-nanopore](https://ajeqektdsfturu3tssiu2w.streamlit.app/))
 
 ## 📋 Data Requirements
 
